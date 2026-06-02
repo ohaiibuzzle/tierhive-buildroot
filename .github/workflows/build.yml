@@ -1,0 +1,59 @@
+name: Build
+
+on:
+  push:
+    branches: [senpai]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Check out external tree
+        uses: actions/checkout@v4
+        with:
+          path: tierhive-buildroot
+
+      - name: Get latest Buildroot release
+        id: br-version
+        run: |
+          VERSION=$(curl -s https://api.github.com/repos/buildroot/buildroot/tags \
+            | jq -r '[.[] | select((.name | test("^[0-9]")) and (.name | test("rc") | not))][0].name')
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Check out Buildroot ${{ steps.br-version.outputs.version }}
+        uses: actions/checkout@v4
+        with:
+          repository: buildroot/buildroot
+          ref: ${{ steps.br-version.outputs.version }}
+          path: buildroot
+
+      - name: Cache downloads
+        uses: actions/cache@v4
+        with:
+          path: buildroot/dl
+          key: buildroot-dl-${{ steps.br-version.outputs.version }}-${{ hashFiles('tierhive-buildroot/configs/tierhive_defconfig') }}
+          restore-keys: |
+            buildroot-dl-${{ steps.br-version.outputs.version }}-
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            bc build-essential cpio file libncurses-dev python3 rsync unzip wget zstd
+
+      - name: Configure
+        working-directory: buildroot
+        run: make BR2_EXTERNAL=${{ github.workspace }}/tierhive-buildroot tierhive_defconfig
+
+      - name: Build
+        working-directory: buildroot
+        run: make
+
+      - name: Upload images
+        uses: actions/upload-artifact@v4
+        with:
+          name: tierhive-images-${{ github.sha }}
+          path: buildroot/output/images/
+          if-no-files-found: error
